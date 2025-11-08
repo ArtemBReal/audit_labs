@@ -1,0 +1,23 @@
+gcc -g -O0 example_1_overflow.c -o example_1_overflow
+valgrind --leak-check=full ./example_1_overflow
+
+-------
+gcc -g -O0 example_2_user_after_free.c -o example_2_user_after_free
+valgrind --leak-check=full ./example_2_user_after_free
+
+-------
+gcc -g -O0 example_3_memory_leak.c -o example_3_memory_leak
+valgrind --leak-check=full --show-reachable=yes ./example_3_memory_leak
+
+-------
+gcc -g -O0 example_4_uninit.c -o example_4_uninit
+valgrind --track-origins=yes ./example_4_ininit
+
+-------
+gcc -g -o prog_1_structs_ways prog_1_structs_ways.c -pthread
+valgrind --leak-check=full --track-origins=yes --show-leak-kinds=all --trace-children=yes ./prog_1_structs_ways 1 2
+
+-------
+gcc -g -o prog_2_files_cache prog_2_files_cache.c -pthread
+valgrind --leak-check=full --track-origins=yes --show-leak-kinds=all ./prog_2_files_cache 1
+valgrind --leak-check=full --track-origins=yes --log-file=valgrind_complex_report.txt ./prog_2_files_cache 4 test.txt
