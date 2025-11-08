@@ -2,7 +2,7 @@ gcc -g -O0 example_1_overflow.c -o example_1_overflow
 valgrind --leak-check=full ./example_1_overflow
 
 -------
-gcc -g -O0 example_2_user_after_free.c -o example_2_user_after_free
+gcc -g -O0 example_2_user_after_free.c -o example_2_use_after_free
 valgrind --leak-check=full ./example_2_user_after_free
 
 -------
@@ -11,7 +11,7 @@ valgrind --leak-check=full --show-reachable=yes ./example_3_memory_leak
 
 -------
 gcc -g -O0 example_4_uninit.c -o example_4_uninit
-valgrind --track-origins=yes ./example_4_ininit
+valgrind --track-origins=yes ./example_4_uninit
 
 -------
 gcc -g -o prog_1_structs_ways prog_1_structs_ways.c -pthread
