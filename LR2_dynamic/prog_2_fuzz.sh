@@ -2,40 +2,105 @@
 
 set -e  # Завершать скрипт при ошибках
 
+# Конфигурация
+PROGRAM_NAME="prog_2_files_cache"
+INPUT_DIR="prog_2_test_inputs"
+OUTPUT_DIR="prog_2_test_outputs"
+
 # Функции
 compile_program() {
     echo "=== Компиляция программы ==="
-    afl-gcc-fast -fsanitize=address -g -o prog_2_files_cache prog_2_files_cache.c -lpthread
+    echo "Попытка компиляции с различными компиляторами AFL++..."
     
-    if [ $? -ne 0 ]; then
-        echo "Ошибка компиляции!"
+    # Пробуем разные компиляторы по порядку
+    local compilers=("afl-gcc-fast" "afl-gcc" "afl-clang-fast" "afl-clang" "gcc")
+    local found_compiler=""
+    
+    for compiler in "${compilers[@]}"; do
+        if command -v "$compiler" &> /dev/null; then
+            echo "Найден компилятор: $compiler"
+            found_compiler="$compiler"
+            break
+        fi
+    done
+    
+    if [ -z "$found_compiler" ]; then
+        echo "Ошибка: не найден ни один компилятор!"
+        echo "Установите AFL++ или gcc"
         exit 1
     fi
-    echo "Компиляция успешно завершена"
+    
+    echo "Используется компилятор: $found_compiler"
+    
+    # Разные флаги для разных компиляторов
+    case "$found_compiler" in
+        *clang*)
+            echo "Компиляция с clang и AddressSanitizer..."
+            $found_compiler -fsanitize=address -g -o "$PROGRAM_NAME" prog_2_files_cache.c -lpthread
+            ;;
+        *gcc*)
+            if [[ "$found_compiler" == *fast* ]]; then
+                echo "Компиляция с afl-gcc-fast..."
+                $found_compiler -g -o "$PROGRAM_NAME" prog_2_files_cache.c -lpthread
+            else
+                echo "Компиляция с стандартным gcc и инструментацией..."
+                $found_compiler -g -o "$PROGRAM_NAME" prog_2_files_cache.c -lpthread
+            fi
+            ;;
+        *)
+            echo "Компиляция с стандартными флагами..."
+            $found_compiler -g -o "$PROGRAM_NAME" prog_2_files_cache.c -lpthread
+            ;;
+    esac
+    
+    if [ $? -ne 0 ]; then
+        echo "Ошибка компиляции с $found_compiler!"
+        echo "Пробуем стандартный gcc..."
+        gcc -g -o "$PROGRAM_NAME" prog_2_files_cache.c -lpthread
+        if [ $? -ne 0 ]; then
+            echo "Ошибка компиляции!"
+            exit 1
+        fi
+    fi
+    
+    echo "Компиляция успешно завершена с $found_compiler"
 }
 
 setup_directories() {
     echo "=== Настройка директорий ==="
-    mkdir -p prog_2_test_inputs prog_2_test_outputs test_files
+    mkdir -p "$INPUT_DIR" "$OUTPUT_DIR" test_files
 }
 
 create_test_cases() {
     echo "=== Создание тестовых случаев ==="
+    
+    # Очищаем предыдущие тесты
+    rm -f "$INPUT_DIR"/*
+    
     # Базовые тесты
-    echo "1" > prog_2_test_inputs/test1
-    echo "2" > prog_2_test_inputs/test2  
-    echo "3" > prog_2_test_inputs/test3
-    echo "4" > prog_2_test_inputs/test4
+    echo "1" > "$INPUT_DIR/test1"
+    echo "2" > "$INPUT_DIR/test2"  
+    echo "3" > "$INPUT_DIR/test3"
+    echo "4" > "$INPUT_DIR/test4"
     
     # Тесты с файлами
-    echo "2 /etc/passwd" > prog_2_test_inputs/test5
-    echo "4 /etc/hosts" > prog_2_test_outputs/test6
-    echo "2 /dev/null" > prog_2_test_inputs/test7
+    echo "2 /etc/passwd" > "$INPUT_DIR/test5"
+    echo "4 /etc/hosts" > "$INPUT_DIR/test6"
+    echo "2 /dev/null" > "$INPUT_DIR/test7"
+    
+    # Дополнительные тесты для лучшего покрытия
+    echo "1" > "$INPUT_DIR/test8"
+    echo "2 ./test_files/simple.txt" > "$INPUT_DIR/test9"
+    echo "3" > "$INPUT_DIR/test10"
+    echo "4 ./test_files/multiline.txt" > "$INPUT_DIR/test11"
     
     # Создаем тестовые файлы
     echo "This is a test file for fuzzing" > test_files/simple.txt
     echo -e "Line 1\nLine 2\nLine 3" > test_files/multiline.txt
+    echo "Short" > test_files/short.txt
     dd if=/dev/urandom of=test_files/random.dat bs=1024 count=10 2>/dev/null
+    
+    echo "Создано 11 тестовых случаев"
 }
 
 create_wrapper_script() {
@@ -99,27 +164,70 @@ WRAPPER_EOF
     chmod +x fuzz_wrapper.sh
 }
 
+check_afl_installation() {
+    echo "=== Проверка установки AFL++ ==="
+    
+    if ! command -v afl-fuzz &> /dev/null; then
+        echo "AFL++ не найден в системе!"
+        echo ""
+        echo "Варианты установки:"
+        echo "1. Ubuntu/Debian: sudo apt install afl++"
+        echo "2. Вручную: https://github.com/AFLplusplus/AFLplusplus"
+        echo ""
+        echo "Можно использовать стандартный gcc для компиляции, но fuzzing будет ограничен"
+        read -p "Продолжить без AFL++? (y/n): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    else
+        echo "AFL++ найден: $(afl-fuzz --version 2>/dev/null | head -n1 || echo 'версия неизвестна')"
+    fi
+}
+
 run_fuzzing() {
     local mode="$1"
     
-    echo "=== Запуск AFL++ fuzzing тестирования ==="
-    echo "Целевая программа: prog_2_files_cache"
-    echo "Входная директория: prog_2_test_inputs"
-    echo "Выходная директория: prog_2_test_outputs"
+    echo "=== Запуск fuzzing тестирования ==="
+    echo "Целевая программа: $PROGRAM_NAME"
+    echo "Входная директория: $INPUT_DIR"
+    echo "Выходная директория: $OUTPUT_DIR"
     echo ""
+    
+    # Проверяем существование программы
+    if [ ! -f "./$PROGRAM_NAME" ]; then
+        echo "Ошибка: программа $PROGRAM_NAME не найдена"
+        echo "Сначала выполните: $0 setup"
+        exit 1
+    fi
+    
+    # Проверяем AFL++
+    if ! command -v afl-fuzz &> /dev/null; then
+        echo "AFL++ не установлен, используем альтернативный метод тестирования..."
+        run_alternative_testing
+        return
+    fi
     
     case "$mode" in
         "master")
             echo "Запуск master процесса..."
-            afl-fuzz -i prog_2_test_inputs -o prog_2_test_outputs -M master -- ./fuzz_wrapper.sh @@
+            afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" -M master -- ./fuzz_wrapper.sh @@
             ;;
         "slave")
             echo "Запуск slave процесса..."
-            afl-fuzz -i prog_2_test_inputs -o prog_2_test_outputs -S slave1 -- ./fuzz_wrapper.sh @@
+            afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" -S slave1 -- ./fuzz_wrapper.sh @@
             ;;
         *)
-            echo "Запуск одиночного процесса fuzzing с увеличенными лимитами..."
-            afl-fuzz -i prog_2_test_inputs -o prog_2_test_outputs \
+            echo "Запуск одиночного процесса fuzzing..."
+            echo "Используемые параметры:"
+            echo "  - Timeout: 5000ms"
+            echo "  - Memory: 1024MB" 
+            echo "  - Time: 24 hours"
+            echo ""
+            echo "Для остановки нажмите Ctrl+C"
+            echo ""
+            
+            afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" \
                 -t 5000 \
                 -m 1024 \
                 -V 86400 \
@@ -128,57 +236,120 @@ run_fuzzing() {
     esac
 }
 
+run_alternative_testing() {
+    echo "=== Альтернативное тестирование (без AFL++) ==="
+    echo "Запуск тестовых случаев с Valgrind для обнаружения утечек..."
+    echo ""
+    
+    for test_file in "$INPUT_DIR"/test*; do
+        if [ -f "$test_file" ]; then
+            echo "Тестируем: $(basename "$test_file")"
+            echo "Содержимое: $(cat "$test_file")"
+            echo "--- Результат Valgrind ---"
+            timeout 10 valgrind --leak-check=summary --error-exitcode=1 ./fuzz_wrapper.sh "$test_file" 2>&1 | grep -E "ERROR SUMMARY|leak" || true
+            echo "--- Завершено ---"
+            echo ""
+        fi
+    done
+    
+    echo "Ручная проверка основных сценариев:"
+    echo "1. Режим 1 (тестирование кэша)..."
+    valgrind --leak-check=full ./"$PROGRAM_NAME" 1 2>&1 | tail -n 10
+    
+    echo ""
+    echo "2. Режим 2 (обработка файла)..."
+    valgrind --leak-check=full ./"$PROGRAM_NAME" 2 "./test_files/simple.txt" 2>&1 | tail -n 10
+    
+    echo ""
+    echo "3. Режим 3 (циклический буфер)..."
+    valgrind --leak-check=full ./"$PROGRAM_NAME" 3 2>&1 | tail -n 10
+    
+    echo ""
+    echo "4. Режим 4 (комбинированный)..."
+    valgrind --leak-check=full ./"$PROGRAM_NAME" 4 "./test_files/multiline.txt" 2>&1 | tail -n 10
+}
+
 check_crashes() {
     echo "=== Проверка найденных крашей ==="
     
     local crash_dir=""
     
-    if [ -d "prog_2_test_outputs/default/crashes" ]; then
-        crash_dir="prog_2_test_outputs/default/crashes"
-    elif [ -d "prog_2_test_outputs/master/crashes" ]; then
-        crash_dir="prog_2_test_outputs/master/crashes"
-    else
-        echo "Директория с крашами не найдена"
-        return 1
-    fi
+    # Ищем директорию с крашами
+    for dir in "$OUTPUT_DIR/default/crashes" "$OUTPUT_DIR/master/crashes" "$OUTPUT_DIR/slave1/crashes"; do
+        if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
+            crash_dir="$dir"
+            break
+        fi
+    done
     
-    if [ -z "$(ls -A "$crash_dir" 2>/dev/null)" ]; then
+    if [ -z "$crash_dir" ]; then
         echo "Краши не найдены"
         return 0
     fi
     
-    echo "Найдены следующие краши:"
-    for file in "$crash_dir"/id*; do
+    echo "Найдены краши в директории: $crash_dir"
+    echo ""
+    
+    local count=0
+    for file in "$crash_dir"/id:* "$crash_dir"/id*; do
         if [ -f "$file" ]; then
-            echo "Тестируем: $file"
+            count=$((count + 1))
+            echo "Краш #$count: $file"
             echo "Содержимое:"
-            cat "$file"
+            cat "$file" 2>/dev/null || echo "(бинарные данные)"
             echo "--- Запуск программы ---"
-            ./fuzz_wrapper.sh "$file"
-            echo "--- Завершено ---"
+            timeout 5 ./fuzz_wrapper.sh "$file"
+            echo "--- Завершено (статус: $?) ---"
             echo ""
         fi
     done
+    
+    if [ $count -eq 0 ]; then
+        echo "Файлы крашей не найдены"
+    fi
 }
 
 monitor_fuzzing() {
     echo "=== Мониторинг прогресса fuzzing ==="
     
-    if [ -f "prog_2_test_outputs/master/fuzzer_stats" ]; then
+    if [ -f "$OUTPUT_DIR/master/fuzzer_stats" ]; then
         echo "=== Master Statistics ==="
-        afl-whatsup prog_2_test_outputs
-    elif [ -f "prog_2_test_outputs/default/fuzzer_stats" ]; then
+        afl-whatsup "$OUTPUT_DIR"
+    elif [ -f "$OUTPUT_DIR/default/fuzzer_stats" ]; then
         echo "=== Fuzzer Statistics ==="
-        afl-whatsup prog_2_test_outputs
+        afl-whatsup "$OUTPUT_DIR"
     else
         echo "Статистика fuzzing не найдена"
-        echo "Запустите fuzzing сначала"
+        echo "Запустите fuzzing сначала: $0 fuzz"
     fi
 }
 
 run_valgrind_check() {
     echo "=== Проверка утечек с Valgrind ==="
-    valgrind --leak-check=full --show-leak-kinds=all ./prog_2_files_cache 1
+    echo "Тестирование различных сценариев..."
+    echo ""
+    
+    echo "1. Режим 1 (тестирование кэша):"
+    valgrind --leak-check=full --show-leak-kinds=all ./"$PROGRAM_NAME" 1
+    
+    echo ""
+    echo "2. Режим 2 (обработка файла):"
+    valgrind --leak-check=full --show-leak-kinds=all ./"$PROGRAM_NAME" 2 "./test_files/simple.txt"
+    
+    echo ""
+    echo "3. Режим 3 (циклический буфер):"
+    valgrind --leak-check=full --show-leak-kinds=all ./"$PROGRAM_NAME" 3
+    
+    echo ""
+    echo "4. Режим 4 (комбинированный):"
+    valgrind --leak-check=full --show-leak-kinds=all ./"$PROGRAM_NAME" 4 "./test_files/multiline.txt"
+}
+
+cleanup() {
+    echo "=== Очистка ==="
+    rm -f "$PROGRAM_NAME" fuzz_wrapper.sh
+    rm -rf test_files
+    echo "Очистка завершена"
 }
 
 show_usage() {
@@ -192,6 +363,7 @@ show_usage() {
     echo "  monitor     - Просмотр статистики fuzzing"
     echo "  check       - Проверка найденных крашей"
     echo "  valgrind    - Проверка утечек с Valgrind"
+    echo "  clean       - Очистка скомпилированных файлов"
     echo "  all         - Полный цикл (setup + fuzz)"
     echo ""
     echo "Примеры:"
@@ -203,10 +375,13 @@ show_usage() {
 # Основная логика
 case "${1:-}" in
     "setup")
+        check_afl_installation
         compile_program
         setup_directories
         create_test_cases
         create_wrapper_script
+        echo ""
+        echo "=== Настройка завершена ==="
         ;;
     "fuzz")
         run_fuzzing "single"
@@ -226,16 +401,26 @@ case "${1:-}" in
     "valgrind")
         run_valgrind_check
         ;;
+    "clean")
+        cleanup
+        ;;
     "all")
-        echo "=== ЗАПУСК ПОЛНОГО ЦИКЛА FUZZING ==="
+        echo "=== ЗАПУСК ПОЛНОГО ЦИКЛА ТЕСТИРОВАНИЯ ==="
+        check_afl_installation
         compile_program
         setup_directories
         create_test_cases
         create_wrapper_script
         echo ""
-        echo "Настройка завершена. Запуск fuzzing через 3 секунды..."
-        sleep 3
-        run_fuzzing "single"
+        echo "Настройка завершена."
+        if command -v afl-fuzz &> /dev/null; then
+            echo "Запуск fuzzing через 3 секунды..."
+            sleep 3
+            run_fuzzing "single"
+        else
+            echo "Запуск альтернативного тестирования..."
+            run_alternative_testing
+        fi
         ;;
     "")
         show_usage

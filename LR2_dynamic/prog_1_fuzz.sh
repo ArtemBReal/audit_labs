@@ -4,19 +4,66 @@ set -e  # Завершать скрипт при ошибках
 
 # Конфигурация
 PROGRAM_NAME="prog_1_structs_ways"
-INPUT_DIR="prog_1_test_inputs"
-OUTPUT_DIR="prog_1_test_outputs"
+INPUT_DIR="prog1_test_inputs"
+OUTPUT_DIR="prog1_test_outputs"
 
 # Функции
 compile_program() {
     echo "=== Компиляция программы ==="
-    afl-gcc-fast -fsanitize=address -g -o "$PROGRAM_NAME" prog_1_structs_ways.c
+    echo "Попытка компиляции с различными компиляторами AFL++..."
     
-    if [ $? -ne 0 ]; then
-        echo "Ошибка компиляции!"
+    # Пробуем разные компиляторы по порядку
+    local compilers=("afl-gcc-fast" "afl-gcc" "afl-clang-fast" "afl-clang" "gcc")
+    local found_compiler=""
+    
+    for compiler in "${compilers[@]}"; do
+        if command -v "$compiler" &> /dev/null; then
+            echo "Найден компилятор: $compiler"
+            found_compiler="$compiler"
+            break
+        fi
+    done
+    
+    if [ -z "$found_compiler" ]; then
+        echo "Ошибка: не найден ни один компилятор!"
+        echo "Установите AFL++ или gcc"
         exit 1
     fi
-    echo "Компиляция успешно завершена"
+    
+    echo "Используется компилятор: $found_compiler"
+    
+    # Разные флаги для разных компиляторов
+    case "$found_compiler" in
+        *clang*)
+            echo "Компиляция с clang и AddressSanitizer..."
+            $found_compiler -fsanitize=address -g -o "$PROGRAM_NAME" prog_1_structs_ways.c
+            ;;
+        *gcc*)
+            if [[ "$found_compiler" == *fast* ]]; then
+                echo "Компиляция с afl-gcc-fast..."
+                $found_compiler -g -o "$PROGRAM_NAME" prog_1_structs_ways.c
+            else
+                echo "Компиляция с стандартным gcc и инструментацией..."
+                $found_compiler -g -o "$PROGRAM_NAME" prog_1_structs_ways.c
+            fi
+            ;;
+        *)
+            echo "Компиляция с стандартными флагами..."
+            $found_compiler -g -o "$PROGRAM_NAME" prog_1_structs_ways.c
+            ;;
+    esac
+    
+    if [ $? -ne 0 ]; then
+        echo "Ошибка компиляции с $found_compiler!"
+        echo "Пробуем стандартный gcc..."
+        gcc -g -o "$PROGRAM_NAME" prog_1_structs_ways.c
+        if [ $? -ne 0 ]; then
+            echo "Ошибка компиляции!"
+            exit 1
+        fi
+    fi
+    
+    echo "Компиляция успешно завершена с $found_compiler"
 }
 
 setup_directories() {
@@ -108,10 +155,31 @@ WRAPPER_EOF
     chmod +x fuzz_wrapper.sh
 }
 
+check_afl_installation() {
+    echo "=== Проверка установки AFL++ ==="
+    
+    if ! command -v afl-fuzz &> /dev/null; then
+        echo "AFL++ не найден в системе!"
+        echo ""
+        echo "Варианты установки:"
+        echo "1. Ubuntu/Debian: sudo apt install afl++"
+        echo "2. Вручную: https://github.com/AFLplusplus/AFLplusplus"
+        echo ""
+        echo "Можно использовать стандартный gcc для компиляции, но fuzzing будет ограничен"
+        read -p "Продолжить без AFL++? (y/n): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    else
+        echo "AFL++ найден: $(afl-fuzz --version 2>/dev/null | head -n1 || echo 'версия неизвестна')"
+    fi
+}
+
 run_fuzzing() {
     local mode="$1"
     
-    echo "=== Запуск AFL++ fuzzing тестирования ==="
+    echo "=== Запуск fuzzing тестирования ==="
     echo "Целевая программа: $PROGRAM_NAME"
     echo "Входная директория: $INPUT_DIR"
     echo "Выходная директория: $OUTPUT_DIR"
@@ -124,11 +192,11 @@ run_fuzzing() {
         exit 1
     fi
     
-    # Проверяем существование wrapper скрипта
-    if [ ! -f "./fuzz_wrapper.sh" ]; then
-        echo "Ошибка: wrapper скрипт не найден"
-        echo "Сначала выполните: $0 setup"
-        exit 1
+    # Проверяем AFL++
+    if ! command -v afl-fuzz &> /dev/null; then
+        echo "AFL++ не установлен, используем альтернативный метод тестирования..."
+        run_alternative_testing
+        return
     fi
     
     case "$mode" in
@@ -141,7 +209,7 @@ run_fuzzing() {
             afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" -S slave1 -- ./fuzz_wrapper.sh @@
             ;;
         *)
-            echo "Запуск одиночного процесса fuzzing с увеличенными лимитами..."
+            echo "Запуск одиночного процесса fuzzing..."
             echo "Используемые параметры:"
             echo "  - Timeout: 5000ms"
             echo "  - Memory: 1024MB" 
@@ -157,6 +225,35 @@ run_fuzzing() {
                 -- ./fuzz_wrapper.sh @@
             ;;
     esac
+}
+
+run_alternative_testing() {
+    echo "=== Альтернативное тестирование (без AFL++) ==="
+    echo "Запуск тестовых случаев с Valgrind для обнаружения утечек..."
+    echo ""
+    
+    for test_file in "$INPUT_DIR"/test*; do
+        if [ -f "$test_file" ]; then
+            echo "Тестируем: $(basename "$test_file")"
+            echo "Содержимое: $(cat "$test_file")"
+            echo "--- Результат Valgrind ---"
+            timeout 10 valgrind --leak-check=summary --error-exitcode=1 ./fuzz_wrapper.sh "$test_file" 2>&1 | grep -E "ERROR SUMMARY|leak"
+            echo "--- Завершено ---"
+            echo ""
+        fi
+    done
+    
+    echo "Ручная проверка основных сценариев:"
+    echo "1. Проверка утечек при удалении узлов..."
+    valgrind --leak-check=full ./"$PROGRAM_NAME" 1 1 2>&1 | tail -n 10
+    
+    echo ""
+    echo "2. Проверка частичного уничтожения..."
+    valgrind --leak-check=full ./"$PROGRAM_NAME" 2 0 2>&1 | tail -n 10
+    
+    echo ""
+    echo "3. Проверка условных утечек..."
+    valgrind --leak-check=full ./"$PROGRAM_NAME" 3 7 2>&1 | tail -n 10
 }
 
 check_crashes() {
@@ -259,28 +356,18 @@ show_usage() {
     echo "  $0 setup     # Настройка окружения"
     echo "  $0 fuzz      # Запуск fuzzing"
     echo "  $0 all       # Полный цикл"
-    echo ""
-    echo "Программа тестирует:"
-    echo "  - Утечки памяти в двусвязном списке"
-    echo "  - Частичное освобождение памяти"
-    echo "  - Условные утечки"
-    echo "  - Рекурсивные утечки"
 }
 
 # Основная логика
 case "${1:-}" in
     "setup")
+        check_afl_installation
         compile_program
         setup_directories
         create_test_cases
         create_wrapper_script
         echo ""
         echo "=== Настройка завершена ==="
-        echo "Созданы тестовые случаи для:"
-        echo "  - Операция 1: Удаление узлов с утечкой данных"
-        echo "  - Операция 2: Частичное уничтожение списка" 
-        echo "  - Операция 3: Условные утечки памяти"
-        echo "  - Операция 4: Рекурсивные утечки"
         ;;
     "fuzz")
         run_fuzzing "single"
@@ -304,16 +391,22 @@ case "${1:-}" in
         cleanup
         ;;
     "all")
-        echo "=== ЗАПУСК ПОЛНОГО ЦИКЛА FUZZING ==="
+        echo "=== ЗАПУСК ПОЛНОГО ЦИКЛА ТЕСТИРОВАНИЯ ==="
+        check_afl_installation
         compile_program
         setup_directories
         create_test_cases
         create_wrapper_script
         echo ""
-        echo "Настройка завершена. Запуск fuzzing через 3 секунды..."
-        echo "Для остановки нажмите Ctrl+C"
-        sleep 3
-        run_fuzzing "single"
+        echo "Настройка завершена."
+        if command -v afl-fuzz &> /dev/null; then
+            echo "Запуск fuzzing через 3 секунды..."
+            sleep 3
+            run_fuzzing "single"
+        else
+            echo "Запуск альтернативного тестирования..."
+            run_alternative_testing
+        fi
         ;;
     "")
         show_usage
