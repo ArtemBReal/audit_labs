@@ -6,3 +6,4 @@
 *.symvers
 *.mod.c
 *.cmd
+/*_test_*/
