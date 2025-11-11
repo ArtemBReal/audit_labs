@@ -21,3 +21,29 @@ valgrind --leak-check=full --track-origins=yes --show-leak-kinds=all --trace-chi
 gcc -g -o prog_2_files_cache prog_2_files_cache.c -pthread
 valgrind --leak-check=full --track-origins=yes --show-leak-kinds=all ./prog_2_files_cache 1
 valgrind --leak-check=full --track-origins=yes --log-file=valgrind_complex_report.txt ./prog_2_files_cache 4 test.txt
+
+
+-------
+chmod +x prog_1_fuzz.sh
+
+# Полный цикл тестирования (рекомендуется)
+./prog_1_fuzz.sh all
+
+# Или поэтапно
+./prog_1_fuzz.sh setup    # Компиляция и настройка
+./prog_1_fuzz.sh fuzz     # Запуск fuzzing
+./prog_1_fuzz.sh monitor  # Мониторинг прогресса
+./prog_1_fuzz.sh check    # Проверка крашей
+
+-------
+chmod +x prog_2_fuzz.sh
+
+# Различные варианты запуска:
+./prog_2_fuzz.sh setup     # Только настройка
+./prog_2_fuzz.sh fuzz      # Только fuzzing
+./prog_2_fuzz.sh master    # Master процесс
+./prog_2_fuzz.sh slave     # Slave процесс  
+./prog_2_fuzz.sh monitor   # Мониторинг
+./fuzz_runprog_2_fuzzner.sh check     # Проверка крашей
+./prog_2_fuzz.sh valgrind  # Проверка утечек
+./prog_2_fuzz.sh all       # Полный цикл (рекомендуется)

@@ -1,0 +1,326 @@
+#!/bin/bash
+
+set -e  # Завершать скрипт при ошибках
+
+# Конфигурация
+PROGRAM_NAME="prog_1_structs_ways"
+INPUT_DIR="prog_1_test_inputs"
+OUTPUT_DIR="prog_1_test_outputs"
+
+# Функции
+compile_program() {
+    echo "=== Компиляция программы ==="
+    afl-gcc-fast -fsanitize=address -g -o "$PROGRAM_NAME" prog_1_structs_ways.c
+    
+    if [ $? -ne 0 ]; then
+        echo "Ошибка компиляции!"
+        exit 1
+    fi
+    echo "Компиляция успешно завершена"
+}
+
+setup_directories() {
+    echo "=== Настройка директорий ==="
+    mkdir -p "$INPUT_DIR" "$OUTPUT_DIR"
+}
+
+create_test_cases() {
+    echo "=== Создание тестовых случаев ==="
+    
+    # Очищаем предыдущие тесты
+    rm -f "$INPUT_DIR"/*
+    
+    # Базовые тесты для всех операций
+    echo "1 1" > "$INPUT_DIR/test1"    # Удаление узла с id=1
+    echo "1 2" > "$INPUT_DIR/test2"    # Удаление узла с id=2  
+    echo "1 3" > "$INPUT_DIR/test3"    # Удаление узла с id=3
+    echo "1 99" > "$INPUT_DIR/test4"   # Удаление несуществующего узла
+    
+    echo "2 0" > "$INPUT_DIR/test5"    # Частичное уничтожение
+    
+    # Тесты для условных утечек
+    echo "3 1" > "$INPUT_DIR/test6"    # condition1=false
+    echo "3 6" > "$INPUT_DIR/test7"    # condition1=true, condition2=false
+    echo "3 7" > "$INPUT_DIR/test8"    # condition1=true, condition2=true
+    echo "3 15" > "$INPUT_DIR/test9"   # condition1=true, condition2=false
+    
+    # Тесты для рекурсивных утечек
+    echo "4 0" > "$INPUT_DIR/test10"   # Рекурсия depth=0
+    echo "4 1" > "$INPUT_DIR/test11"   # Рекурсия depth=1
+    echo "4 5" > "$INPUT_DIR/test12"   # Рекурсия depth=5
+    echo "4 10" > "$INPUT_DIR/test13"  # Рекурсия depth=10
+    
+    # Граничные значения
+    echo "1 0" > "$INPUT_DIR/test14"   # Удаление с id=0
+    echo "1 -1" > "$INPUT_DIR/test15"  # Удаление с отрицательным id
+    echo "3 5" > "$INPUT_DIR/test16"   # Граница condition1
+    echo "3 10" > "$INPUT_DIR/test17"  # Граница condition2
+    
+    echo "Создано 17 тестовых случаев"
+}
+
+create_wrapper_script() {
+    echo "=== Создание wrapper скрипта ==="
+    cat > fuzz_wrapper.sh << 'WRAPPER_EOF'
+#!/bin/bash
+
+# Читаем входные данные от afl-fuzz
+INPUT_FILE="$1"
+TEMP_FILE="/tmp/fuzz_input_$$.txt"
+
+# Копируем входные данные для обработки
+cp "$INPUT_FILE" "$TEMP_FILE" 2>/dev/null || exit 1
+
+# Парсим входные данные
+first_line=$(head -n 1 "$TEMP_FILE" 2>/dev/null)
+
+if [ -n "$first_line" ]; then
+    # Пытаемся извлечь два числа
+    OPERATION=$(echo "$first_line" | awk '{print $1}')
+    VALUE=$(echo "$first_line" | awk '{print $2}')
+    
+    # Проверяем валидность операции (1-4)
+    if [ "$OPERATION" -ge 1 ] 2>/dev/null && [ "$OPERATION" -le 4 ] 2>/dev/null; then
+        # Проверяем валидность значения
+        if [ "$VALUE" -eq "$VALUE" ] 2>/dev/null; then
+            ./prog_1_structs_ways "$OPERATION" "$VALUE"
+        else
+            # Если значение не число, используем 0
+            ./prog_1_structs_ways "$OPERATION" 0
+        fi
+    else
+        # Случайные данные - генерируем случайную операцию и значение
+        RAND_OP=$((RANDOM % 4 + 1))
+        RAND_VAL=$((RANDOM % 20))
+        ./prog_1_structs_ways "$RAND_OP" "$RAND_VAL"
+    fi
+else
+    # Пустой файл - используем значения по умолчанию
+    ./prog_1_structs_ways 1 1
+fi
+
+# Очистка
+rm -f "$TEMP_FILE" 2>/dev/null
+
+exit 0
+WRAPPER_EOF
+
+    chmod +x fuzz_wrapper.sh
+}
+
+run_fuzzing() {
+    local mode="$1"
+    
+    echo "=== Запуск AFL++ fuzzing тестирования ==="
+    echo "Целевая программа: $PROGRAM_NAME"
+    echo "Входная директория: $INPUT_DIR"
+    echo "Выходная директория: $OUTPUT_DIR"
+    echo ""
+    
+    # Проверяем существование программы
+    if [ ! -f "./$PROGRAM_NAME" ]; then
+        echo "Ошибка: программа $PROGRAM_NAME не найдена"
+        echo "Сначала выполните: $0 setup"
+        exit 1
+    fi
+    
+    # Проверяем существование wrapper скрипта
+    if [ ! -f "./fuzz_wrapper.sh" ]; then
+        echo "Ошибка: wrapper скрипт не найден"
+        echo "Сначала выполните: $0 setup"
+        exit 1
+    fi
+    
+    case "$mode" in
+        "master")
+            echo "Запуск master процесса..."
+            afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" -M master -- ./fuzz_wrapper.sh @@
+            ;;
+        "slave")
+            echo "Запуск slave процесса..."
+            afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" -S slave1 -- ./fuzz_wrapper.sh @@
+            ;;
+        *)
+            echo "Запуск одиночного процесса fuzzing с увеличенными лимитами..."
+            echo "Используемые параметры:"
+            echo "  - Timeout: 5000ms"
+            echo "  - Memory: 1024MB" 
+            echo "  - Time: 24 hours"
+            echo ""
+            echo "Для остановки нажмите Ctrl+C"
+            echo ""
+            
+            afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" \
+                -t 5000 \
+                -m 1024 \
+                -V 86400 \
+                -- ./fuzz_wrapper.sh @@
+            ;;
+    esac
+}
+
+check_crashes() {
+    echo "=== Проверка найденных крашей ==="
+    
+    local crash_dir=""
+    
+    # Ищем директорию с крашами
+    for dir in "$OUTPUT_DIR/default/crashes" "$OUTPUT_DIR/master/crashes" "$OUTPUT_DIR/slave1/crashes"; do
+        if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
+            crash_dir="$dir"
+            break
+        fi
+    done
+    
+    if [ -z "$crash_dir" ]; then
+        echo "Краши не найдены"
+        return 0
+    fi
+    
+    echo "Найдены краши в директории: $crash_dir"
+    echo ""
+    
+    local count=0
+    for file in "$crash_dir"/id:*; do
+        if [ -f "$file" ]; then
+            count=$((count + 1))
+            echo "Краш #$count: $file"
+            echo "Содержимое:"
+            cat "$file" 2>/dev/null || echo "(бинарные данные)"
+            echo "--- Запуск программы ---"
+            timeout 5 ./fuzz_wrapper.sh "$file"
+            echo "--- Завершено (статус: $?) ---"
+            echo ""
+        fi
+    done
+    
+    if [ $count -eq 0 ]; then
+        echo "Файлы крашей не найдены"
+    fi
+}
+
+monitor_fuzzing() {
+    echo "=== Мониторинг прогресса fuzzing ==="
+    
+    if [ -f "$OUTPUT_DIR/master/fuzzer_stats" ]; then
+        echo "=== Master Statistics ==="
+        afl-whatsup "$OUTPUT_DIR"
+    elif [ -f "$OUTPUT_DIR/default/fuzzer_stats" ]; then
+        echo "=== Fuzzer Statistics ==="
+        afl-whatsup "$OUTPUT_DIR"
+    else
+        echo "Статистика fuzzing не найдена"
+        echo "Запустите fuzzing сначала: $0 fuzz"
+    fi
+}
+
+run_valgrind_check() {
+    echo "=== Проверка утечек с Valgrind ==="
+    echo "Тестирование различных сценариев..."
+    echo ""
+    
+    echo "1. Операция 1 (удаление узла):"
+    valgrind --leak-check=full --show-leak-kinds=all ./"$PROGRAM_NAME" 1 2
+    
+    echo ""
+    echo "2. Операция 2 (частичное уничтожение):"
+    valgrind --leak-check=full --show-leak-kinds=all ./"$PROGRAM_NAME" 2 0
+    
+    echo ""
+    echo "3. Операция 3 (условная утечка):"
+    valgrind --leak-check=full --show-leak-kinds=all ./"$PROGRAM_NAME" 3 7
+    
+    echo ""
+    echo "4. Операция 4 (рекурсивная утечка):"
+    valgrind --leak-check=full --show-leak-kinds=all ./"$PROGRAM_NAME" 4 3
+}
+
+cleanup() {
+    echo "=== Очистка ==="
+    rm -f "$PROGRAM_NAME" fuzz_wrapper.sh
+    echo "Очистка завершена"
+}
+
+show_usage() {
+    echo "Использование: $0 [команда]"
+    echo ""
+    echo "Команды:"
+    echo "  setup       - Настройка окружения (компиляция + создание тестов)"
+    echo "  fuzz        - Запуск fuzzing (одиночный режим)"
+    echo "  master      - Запуск master процесса"
+    echo "  slave       - Запуск slave процесса"  
+    echo "  monitor     - Просмотр статистики fuzzing"
+    echo "  check       - Проверка найденных крашей"
+    echo "  valgrind    - Проверка утечек с Valgrind"
+    echo "  clean       - Очистка скомпилированных файлов"
+    echo "  all         - Полный цикл (setup + fuzz)"
+    echo ""
+    echo "Примеры:"
+    echo "  $0 setup     # Настройка окружения"
+    echo "  $0 fuzz      # Запуск fuzzing"
+    echo "  $0 all       # Полный цикл"
+    echo ""
+    echo "Программа тестирует:"
+    echo "  - Утечки памяти в двусвязном списке"
+    echo "  - Частичное освобождение памяти"
+    echo "  - Условные утечки"
+    echo "  - Рекурсивные утечки"
+}
+
+# Основная логика
+case "${1:-}" in
+    "setup")
+        compile_program
+        setup_directories
+        create_test_cases
+        create_wrapper_script
+        echo ""
+        echo "=== Настройка завершена ==="
+        echo "Созданы тестовые случаи для:"
+        echo "  - Операция 1: Удаление узлов с утечкой данных"
+        echo "  - Операция 2: Частичное уничтожение списка" 
+        echo "  - Операция 3: Условные утечки памяти"
+        echo "  - Операция 4: Рекурсивные утечки"
+        ;;
+    "fuzz")
+        run_fuzzing "single"
+        ;;
+    "master")
+        run_fuzzing "master"
+        ;;
+    "slave")
+        run_fuzzing "slave"
+        ;;
+    "monitor")
+        monitor_fuzzing
+        ;;
+    "check")
+        check_crashes
+        ;;
+    "valgrind")
+        run_valgrind_check
+        ;;
+    "clean")
+        cleanup
+        ;;
+    "all")
+        echo "=== ЗАПУСК ПОЛНОГО ЦИКЛА FUZZING ==="
+        compile_program
+        setup_directories
+        create_test_cases
+        create_wrapper_script
+        echo ""
+        echo "Настройка завершена. Запуск fuzzing через 3 секунды..."
+        echo "Для остановки нажмите Ctrl+C"
+        sleep 3
+        run_fuzzing "single"
+        ;;
+    "")
+        show_usage
+        ;;
+    *)
+        echo "Неизвестная команда: $1"
+        show_usage
+        exit 1
+        ;;
+esac
