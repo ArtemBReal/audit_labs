@@ -27,49 +27,68 @@ check_system_config() {
 }
 
 compile_program() {
-    echo "=== Компиляция программы ==="
+    echo "=== Компиляция программы с инструментацией AFL++ ==="
     echo "Поиск компиляторов AFL++..."
     
     # Пробуем разные компиляторы по порядку
-    local compilers=("afl-gcc-fast" "afl-gcc" "afl-clang-fast" "afl-clang" "gcc")
+    local compilers=("afl-gcc-fast" "afl-gcc" "afl-clang-fast" "afl-clang")
     local found_compiler=""
     
     for compiler in "${compilers[@]}"; do
         if command -v "$compiler" &> /dev/null; then
-            echo "Найден компилятор: $compiler"
+            echo "Найден компилятор AFL++: $compiler"
             found_compiler="$compiler"
             break
         fi
     done
     
     if [ -z "$found_compiler" ]; then
-        echo "Ошибка: не найден ни один компилятор!"
+        echo "Ошибка: не найден компилятор AFL++!"
         echo "Установите AFL++: sudo apt install afl++"
+        echo "Или используйте QEMU режим: $0 qemu"
         exit 1
     fi
     
     echo "Используется компилятор: $found_compiler"
     
-    # Компилируем основную программу
+    # Компилируем основную программу с инструментацией AFL++
     case "$found_compiler" in
         *clang*)
-            echo "Компиляция с clang и AddressSanitizer..."
+            echo "Компиляция с afl-clang и AddressSanitizer..."
             $found_compiler -fsanitize=address -g -o "$PROGRAM_NAME" prog_2_files_cache.c -lpthread
             ;;
         *)
-            echo "Компиляция программы..."
+            echo "Компиляция с инструментацией AFL++..."
             $found_compiler -g -o "$PROGRAM_NAME" prog_2_files_cache.c -lpthread
             ;;
     esac
     
     if [ $? -ne 0 ]; then
         echo "Ошибка компиляции с $found_compiler!"
-        echo "Пробуем стандартный gcc..."
-        gcc -g -o "$PROGRAM_NAME" prog_2_files_cache.c -lpthread
-        if [ $? -ne 0 ]; then
-            echo "Ошибка компиляции!"
-            exit 1
-        fi
+        exit 1
+    fi
+    
+    # Компилируем C-враппер обычным gcc (ему не нужна инструментация)
+    echo "Компиляция C-враппера..."
+    gcc -o prog_2_fuzz_wrapper prog_2_fuzz_wrapper.c
+    if [ $? -ne 0 ]; then
+        echo "Ошибка компиляции C-враппера!"
+        exit 1
+    fi
+    
+    echo "Компиляция успешно завершена"
+}
+
+compile_with_qemu() {
+    echo "=== Компиляция для QEMU режима ==="
+    
+    # Компилируем обычным gcc для QEMU режима
+    echo "Компиляция программы стандартным gcc..."
+    gcc -g -o "$PROGRAM_NAME" prog_2_files_cache.c -lpthread
+    
+    if [ $? -ne 0 ]; then
+        echo "Ошибка компиляции!"
+        exit 1
     fi
     
     # Компилируем C-враппер
@@ -80,7 +99,7 @@ compile_program() {
         exit 1
     fi
     
-    echo "Компиляция успешно завершена"
+    echo "Компиляция для QEMU режима завершена"
 }
 
 setup_directories() {
@@ -192,7 +211,6 @@ check_afl_installation() {
         echo ""
         echo "Установите AFL++:"
         echo "  Ubuntu/Debian: sudo apt install afl++"
-        echo "  Или из исходников: https://github.com/AFLplusplus/AFLplusplus"
         exit 1
     else
         echo "AFL++ найден: $(afl-fuzz --version 2>/dev/null | head -n1 || echo 'версия неизвестна')"
@@ -201,11 +219,18 @@ check_afl_installation() {
 
 run_fuzzing() {
     local mode="$1"
+    local use_qemu="$2"
     
     echo "=== Запуск AFL++ fuzzing ==="
     echo "Целевая программа: $PROGRAM_NAME"
     echo "Входная директория: $INPUT_DIR"
     echo "Выходная директория: $OUTPUT_DIR"
+    
+    if [ "$use_qemu" = "qemu" ]; then
+        echo "Режим: QEMU (без инструментации)"
+    else
+        echo "Режим: инструментированный бинарник"
+    fi
     echo ""
     
     # Проверяем существование программы
@@ -224,17 +249,30 @@ run_fuzzing() {
     
     # Устанавливаем переменную для игнорирования предупреждений о core dump
     export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
-    echo "Установлена переменная AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1"
-    echo ""
+    
+    # Базовые параметры AFL++
+    local afl_params=(
+        -i "$INPUT_DIR"
+        -o "$OUTPUT_DIR"
+        -t 5000
+        -m 1024
+        -V 86400
+    )
+    
+    # Добавляем QEMU режим если нужно
+    if [ "$use_qemu" = "qemu" ]; then
+        afl_params+=(-Q)
+        echo "Используется QEMU режим (-Q)"
+    fi
     
     case "$mode" in
         "master")
             echo "Запуск master процесса..."
-            afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" -M master -- ./prog_2_fuzz_wrapper @@
+            afl-fuzz "${afl_params[@]}" -M master -- ./prog_2_fuzz_wrapper @@
             ;;
         "slave")
             echo "Запуск slave процесса..."
-            afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" -S slave1 -- ./prog_2_fuzz_wrapper @@
+            afl-fuzz "${afl_params[@]}" -S slave1 -- ./prog_2_fuzz_wrapper @@
             ;;
         *)
             echo "Запуск одиночного процесса fuzzing..."
@@ -242,15 +280,14 @@ run_fuzzing() {
             echo "  - Timeout: 5000ms"
             echo "  - Memory: 1024MB" 
             echo "  - Time: 24 hours"
+            if [ "$use_qemu" = "qemu" ]; then
+                echo "  - QEMU mode: enabled"
+            fi
             echo ""
             echo "Для остановки нажмите Ctrl+C"
             echo ""
             
-            afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" \
-                -t 5000 \
-                -m 1024 \
-                -V 86400 \
-                -- ./prog_2_fuzz_wrapper @@
+            afl-fuzz "${afl_params[@]}" -- ./prog_2_fuzz_wrapper @@
             ;;
     esac
 }
@@ -325,19 +362,21 @@ show_usage() {
     echo "Использование: $0 [команда]"
     echo ""
     echo "Команды:"
-    echo "  setup       - Настройка окружения (компиляция + создание тестов)"
-    echo "  fuzz        - Запуск fuzzing (одиночный режим)"
+    echo "  setup       - Настройка с инструментацией AFL++"
+    echo "  qemu        - Настройка для QEMU режима"
+    echo "  fuzz        - Запуск fuzzing (инструментированный)"
+    echo "  fuzz-qemu   - Запуск fuzzing в QEMU режиме"
     echo "  master      - Запуск master процесса"
     echo "  slave       - Запуск slave процесса"  
     echo "  monitor     - Просмотр статистики fuzzing"
     echo "  check       - Проверка найденных крашей"
     echo "  clean       - Очистка скомпилированных файлов"
-    echo "  all         - Полный цикл (setup + fuzz)"
     echo ""
     echo "Примеры:"
-    echo "  $0 setup     # Настройка окружения"
+    echo "  $0 setup     # Настройка с инструментацией"
+    echo "  $0 qemu      # Настройка для QEMU режима"
     echo "  $0 fuzz      # Запуск fuzzing"
-    echo "  $0 all       # Полный цикл"
+    echo "  $0 fuzz-qemu # Запуск в QEMU режиме"
 }
 
 # Основная логика
@@ -352,19 +391,35 @@ case "${1:-}" in
         echo ""
         echo "=== Настройка завершена ==="
         echo "Созданы:"
-        echo "  - Основная программа: $PROGRAM_NAME"
+        echo "  - Инструментированная программа: $PROGRAM_NAME"
         echo "  - C-враппер: prog_2_fuzz_wrapper"
         echo "  - Тестовые случаи: 11 штук в $INPUT_DIR"
-        echo "  - Тестовые файлы: в директории test_files"
+        ;;
+    "qemu")
+        check_system_config
+        check_afl_installation
+        create_c_wrapper
+        compile_with_qemu
+        setup_directories
+        create_test_cases
+        echo ""
+        echo "=== Настройка для QEMU режима завершена ==="
+        echo "Созданы:"
+        echo "  - Программа для QEMU: $PROGRAM_NAME"
+        echo "  - C-враппер: prog_2_fuzz_wrapper"
+        echo "  - Тестовые случаи: 11 штук в $INPUT_DIR"
         ;;
     "fuzz")
-        run_fuzzing "single"
+        run_fuzzing "single" "normal"
+        ;;
+    "fuzz-qemu")
+        run_fuzzing "single" "qemu"
         ;;
     "master")
-        run_fuzzing "master"
+        run_fuzzing "master" "normal"
         ;;
     "slave")
-        run_fuzzing "slave"
+        run_fuzzing "slave" "normal"
         ;;
     "monitor")
         monitor_fuzzing
@@ -374,19 +429,6 @@ case "${1:-}" in
         ;;
     "clean")
         cleanup
-        ;;
-    "all")
-        echo "=== ЗАПУСК ПОЛНОГО ЦИКЛА FUZZING ==="
-        check_system_config
-        check_afl_installation
-        create_c_wrapper
-        compile_program
-        setup_directories
-        create_test_cases
-        echo ""
-        echo "Настройка завершена. Запуск fuzzing через 3 секунды..."
-        sleep 3
-        run_fuzzing "single"
         ;;
     "")
         show_usage
