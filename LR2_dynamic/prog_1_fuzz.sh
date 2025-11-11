@@ -4,10 +4,36 @@ set -e  # Завершать скрипт при ошибках
 
 # Конфигурация
 PROGRAM_NAME="prog_1_structs_ways"
-INPUT_DIR="prog1_test_inputs"
-OUTPUT_DIR="prog1_test_outputs"
+INPUT_DIR="prog_1_test_inputs"
+OUTPUT_DIR="prog_1_test_outputs"
 
 # Функции
+check_system_config() {
+    echo "=== Проверка конфигурации системы ==="
+    
+    # Проверяем core_pattern
+    if [ -f "/proc/sys/kernel/core_pattern" ]; then
+        local core_pattern=$(cat /proc/sys/kernel/core_pattern 2>/dev/null)
+        
+        if [ "$core_pattern" != "core" ] && [[ "$core_pattern" != core* ]]; then
+            echo "ВНИМАНИЕ: systemd-coredump обнаружен (core_pattern: $core_pattern)"
+            echo "Это может замедлить обнаружение крашей AFL++"
+            echo ""
+            echo "Варианты решения:"
+            echo "1. Временное отключение: sudo bash -c 'echo core > /proc/sys/kernel/core_pattern'"
+            echo "2. Игнорировать предупреждение (будет установлено автоматически)"
+            echo "3. Продолжить как есть (возможны задержки)"
+            echo ""
+            
+        else
+            echo "Конфигурация core dump корректна: $core_pattern"
+        fi
+    else
+        echo "Файл /proc/sys/kernel/core_pattern не найден"
+    fi
+    echo ""
+}
+
 compile_program() {
     echo "=== Компиляция программы ==="
     echo "Попытка компиляции с различными компиляторами AFL++..."
@@ -43,7 +69,7 @@ compile_program() {
                 echo "Компиляция с afl-gcc-fast..."
                 $found_compiler -g -o "$PROGRAM_NAME" prog_1_structs_ways.c
             else
-                echo "Компиляция с стандартным gcc и инструментацией..."
+                echo "Компиляция с стандартным gcc..."
                 $found_compiler -g -o "$PROGRAM_NAME" prog_1_structs_ways.c
             fi
             ;;
@@ -103,12 +129,17 @@ create_test_cases() {
     echo "3 5" > "$INPUT_DIR/test16"   # Граница condition1
     echo "3 10" > "$INPUT_DIR/test17"  # Граница condition2
     
-    echo "Создано 17 тестовых случаев"
+    # Дополнительные случайные тесты
+    echo "1 42" > "$INPUT_DIR/test18"  # Случайный ID
+    echo "3 8" > "$INPUT_DIR/test19"   # Граничное значение
+    echo "4 2" > "$INPUT_DIR/test20"   # Небольшая рекурсия
+    
+    echo "Создано 20 тестовых случаев"
 }
 
 create_wrapper_script() {
     echo "=== Создание wrapper скрипта ==="
-    cat > fuzz_wrapper.sh << 'WRAPPER_EOF'
+    cat > prog_1_fuzz_wrapper.sh << 'WRAPPER_EOF'
 #!/bin/bash
 
 # Читаем входные данные от afl-fuzz
@@ -152,7 +183,7 @@ rm -f "$TEMP_FILE" 2>/dev/null
 exit 0
 WRAPPER_EOF
 
-    chmod +x fuzz_wrapper.sh
+    chmod +x prog_1_fuzz_wrapper.sh
 }
 
 check_afl_installation() {
@@ -192,6 +223,13 @@ run_fuzzing() {
         exit 1
     fi
     
+    # Проверяем wrapper скрипт
+    if [ ! -f "./prog_1_fuzz_wrapper.sh" ]; then
+        echo "Ошибка: wrapper скрипт не найден"
+        echo "Сначала выполните: $0 setup"
+        exit 1
+    fi
+    
     # Проверяем AFL++
     if ! command -v afl-fuzz &> /dev/null; then
         echo "AFL++ не установлен, используем альтернативный метод тестирования..."
@@ -199,14 +237,21 @@ run_fuzzing() {
         return
     fi
     
+    # Устанавливаем переменную для игнорирования предупреждений о core dump
+    export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
+    echo "Установлена переменная AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1"
+    echo "Для лучшей производительности рекомендуется временно отключить systemd-coredump:"
+    echo "  sudo bash -c 'echo core > /proc/sys/kernel/core_pattern'"
+    echo ""
+    
     case "$mode" in
         "master")
             echo "Запуск master процесса..."
-            afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" -M master -- ./fuzz_wrapper.sh @@
+            afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" -M master -- ./prog_1_fuzz_wrapper.sh @@
             ;;
         "slave")
             echo "Запуск slave процесса..."
-            afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" -S slave1 -- ./fuzz_wrapper.sh @@
+            afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" -S slave1 -- ./prog_1_fuzz_wrapper.sh @@
             ;;
         *)
             echo "Запуск одиночного процесса fuzzing..."
@@ -214,6 +259,7 @@ run_fuzzing() {
             echo "  - Timeout: 5000ms"
             echo "  - Memory: 1024MB" 
             echo "  - Time: 24 hours"
+            echo "  - AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1"
             echo ""
             echo "Для остановки нажмите Ctrl+C"
             echo ""
@@ -222,7 +268,7 @@ run_fuzzing() {
                 -t 5000 \
                 -m 1024 \
                 -V 86400 \
-                -- ./fuzz_wrapper.sh @@
+                -- ./prog_1_fuzz_wrapper.sh @@
             ;;
     esac
 }
@@ -237,7 +283,7 @@ run_alternative_testing() {
             echo "Тестируем: $(basename "$test_file")"
             echo "Содержимое: $(cat "$test_file")"
             echo "--- Результат Valgrind ---"
-            timeout 10 valgrind --leak-check=summary --error-exitcode=1 ./fuzz_wrapper.sh "$test_file" 2>&1 | grep -E "ERROR SUMMARY|leak"
+            timeout 10 valgrind --leak-check=summary --error-exitcode=1 ./prog_1_fuzz_wrapper.sh "$test_file" 2>&1 | grep -E "ERROR SUMMARY|leak" || true
             echo "--- Завершено ---"
             echo ""
         fi
@@ -254,6 +300,10 @@ run_alternative_testing() {
     echo ""
     echo "3. Проверка условных утечек..."
     valgrind --leak-check=full ./"$PROGRAM_NAME" 3 7 2>&1 | tail -n 10
+    
+    echo ""
+    echo "4. Проверка рекурсивных утечек..."
+    valgrind --leak-check=full ./"$PROGRAM_NAME" 4 3 2>&1 | tail -n 10
 }
 
 check_crashes() {
@@ -278,14 +328,14 @@ check_crashes() {
     echo ""
     
     local count=0
-    for file in "$crash_dir"/id:*; do
+    for file in "$crash_dir"/id:* "$crash_dir"/id*; do
         if [ -f "$file" ]; then
             count=$((count + 1))
             echo "Краш #$count: $file"
             echo "Содержимое:"
             cat "$file" 2>/dev/null || echo "(бинарные данные)"
             echo "--- Запуск программы ---"
-            timeout 5 ./fuzz_wrapper.sh "$file"
+            timeout 5 ./prog_1_fuzz_wrapper.sh "$file"
             echo "--- Завершено (статус: $?) ---"
             echo ""
         fi
@@ -305,9 +355,13 @@ monitor_fuzzing() {
     elif [ -f "$OUTPUT_DIR/default/fuzzer_stats" ]; then
         echo "=== Fuzzer Statistics ==="
         afl-whatsup "$OUTPUT_DIR"
+    elif [ -f "$OUTPUT_DIR/slave1/fuzzer_stats" ]; then
+        echo "=== Slave1 Statistics ==="
+        afl-whatsup "$OUTPUT_DIR"
     else
         echo "Статистика fuzzing не найдена"
         echo "Запустите fuzzing сначала: $0 fuzz"
+        echo "Или проверьте директорию: $OUTPUT_DIR"
     fi
 }
 
@@ -334,7 +388,7 @@ run_valgrind_check() {
 
 cleanup() {
     echo "=== Очистка ==="
-    rm -f "$PROGRAM_NAME" fuzz_wrapper.sh
+    rm -f "$PROGRAM_NAME" prog_1_fuzz_wrapper.sh
     echo "Очистка завершена"
 }
 
@@ -356,11 +410,15 @@ show_usage() {
     echo "  $0 setup     # Настройка окружения"
     echo "  $0 fuzz      # Запуск fuzzing"
     echo "  $0 all       # Полный цикл"
+    echo ""
+    echo "Примечание: для лучшей производительности рекомендуется временно отключить systemd-coredump:"
+    echo "  sudo bash -c 'echo core > /proc/sys/kernel/core_pattern'"
 }
 
 # Основная логика
 case "${1:-}" in
     "setup")
+        check_system_config
         check_afl_installation
         compile_program
         setup_directories
@@ -368,6 +426,11 @@ case "${1:-}" in
         create_wrapper_script
         echo ""
         echo "=== Настройка завершена ==="
+        echo "Тестовые случаи созданы для:"
+        echo "  - Операция 1: Удаление узлов с утечкой данных"
+        echo "  - Операция 2: Частичное уничтожение списка" 
+        echo "  - Операция 3: Условные утечки памяти"
+        echo "  - Операция 4: Рекурсивные утечки"
         ;;
     "fuzz")
         run_fuzzing "single"
@@ -392,6 +455,7 @@ case "${1:-}" in
         ;;
     "all")
         echo "=== ЗАПУСК ПОЛНОГО ЦИКЛА ТЕСТИРОВАНИЯ ==="
+        check_system_config
         check_afl_installation
         compile_program
         setup_directories
