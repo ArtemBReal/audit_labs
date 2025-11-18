@@ -121,9 +121,8 @@ fuzz_test() {
     export AFL_SKIP_BIN_CHECK=1
     export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
     log "Запуск фаззинга:"
-    # Шлюз sh – читаем файл, разбираем его на токены и передаём как два аргумента
-    afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" \
-        -- sh -c 'x=$(cat "$1"); set -- $x; ./"'"$PROGRAM_NAME"'" "$@"' _ @@
+    # Программа читает тест из stdin, поэтому обёртки не требуется
+    afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" -- ./"$PROGRAM_NAME"
 }
 
 # ---------- Основная логика ----------
