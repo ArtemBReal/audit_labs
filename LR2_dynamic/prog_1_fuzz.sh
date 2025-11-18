@@ -105,6 +105,8 @@ EOF
 # Запуск фаззинга
 # ----------------------------------------
 fuzz_test() {
+    export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
+    export AFL_SKIP_BIN_CHECK=1
     log "Запуск фаззинга:"
     # Файл‑тест передаётся как два аргумента через обёртку sh -c
     afl-fuzz -i "$INPUT_DIR" -o "$OUTPUT_DIR" \
@@ -120,10 +122,6 @@ case "${1:-}" in
         compile_program
         setup_directories
         create_test_cases
-
-        export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
-        export AFL_SKIP_BIN_CHECK=1
-        
         echo
         echo "Подготовка завершена."
         ;;
