@@ -26,19 +26,13 @@ valgrind --leak-check=full --track-origins=yes --log-file=valgrind_complex_repor
 -------
 chmod +x prog_1_fuzz.sh
 
-# Полный цикл тестирования (рекомендуется)
-./prog_1_fuzz.sh all
-
-# Или поэтапно
 ./prog_1_fuzz.sh setup    # Компиляция и настройка
 ./prog_1_fuzz.sh fuzz     # Запуск fuzzing
-./prog_1_fuzz.sh check    # Проверка крашей
+./prog_1_fuzz.sh clean    # Очистка сгенерированных данных
 
 -------
 chmod +x prog_2_fuzz.sh
 
-# Различные варианты запуска:
 ./prog_2_fuzz.sh setup     # Только настройка
 ./prog_2_fuzz.sh fuzz      # Только fuzzing
-./prog_2_fuzz.sh valgrind  # Проверка утечек
-./prog_2_fuzz.sh all       # Полный цикл (рекомендуется)
+./prog_2_fuzz.sh clean     # Очистка сгенерированных данных
