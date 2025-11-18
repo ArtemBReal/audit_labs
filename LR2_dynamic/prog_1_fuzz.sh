@@ -4,7 +4,8 @@ set -euo pipefail
 # ----------------------------------------
 # Конфигурация
 # ----------------------------------------
-PROGRAM_NAME="prog_1_structs_ways"
+#PROGRAM_NAME="prog_1_structs_ways"
+PROGRAM_NAME="prog_1_structs_ways_fuzz"
 INPUT_DIR="prog_1_test_inputs"
 OUTPUT_DIR="prog_1_test_outputs"
 
@@ -39,7 +40,7 @@ compile_program() {
     $CC -O1 -g \
         -fsanitize-coverage=trace-pc-guard,trace-pc \
         -fno-inline -fno-omit-frame-pointer \
-        -o "$PROGRAM_NAME" prog_1_structs_ways.c
+        -o "$PROGRAM_NAME" "$PROGRAM_NAME".c
     log "Бинарник $PROGRAM_NAME готов."
 }
 

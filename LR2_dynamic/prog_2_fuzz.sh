@@ -6,7 +6,8 @@ set -euo pipefail
 # --------------------------------------------------------------------
 
 # ---------- Конфигурация ----------
-PROGRAM_NAME="prog_2_files_cache"
+#PROGRAM_NAME="prog_2_files_cache"
+PROGRAM_NAME="prog_2_files_cache_fuzz"
 INPUT_DIR="prog_2_test_inputs"
 OUTPUT_DIR="prog_2_test_outputs"
 TEST_DIR="test_files"
@@ -46,7 +47,7 @@ compile_program() {
     $CC -O1 -g \
         -fsanitize-coverage=trace-pc-guard,trace-pc \
         -fno-inline -fno-omit-frame-pointer \
-        -o "$PROGRAM_NAME" prog_2_files_cache.c -lpthread
+        -o "$PROGRAM_NAME" "$PROGRAM_NAME".c -lpthread
     log "Бинарник $PROGRAM_NAME готов."
 }
 
