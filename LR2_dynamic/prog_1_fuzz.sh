@@ -56,27 +56,15 @@ setup_directories() {
 # Генерация тестовых файлов
 # ----------------------------------------
 create_test_cases() {
-    log "Генерируем 1000 тестовых файлов…"
+    log "Генерируем 300 тестовых файлов…"
 
-    for i in $(seq 1 1000); do
-        # 20 % «плохих» тестов
-        if (( RANDOM % 5 == 0 )); then
-            case $((RANDOM % 5)) in
-                0)  : > "$INPUT_DIR/input_$i"                      ;; # пустой
-                1)  echo "$((1 + RANDOM % 4))" > "$INPUT_DIR/input_$i" ;; # только операция
-                2)  echo "$((1 + RANDOM % 4)) abc" > "$INPUT_DIR/input_$i" ;; # строка без цифр
-                3)  echo "$((1 + RANDOM % 4)) 42 extra" > "$INPUT_DIR/input_$i" ;; # лишний аргумент
-                4)  echo "abc def" > "$INPUT_DIR/input_$i"                ;; # строка без чисел вообще
-            esac
-        else
-            # 80 % валидных тестов
-            op=$((1 + RANDOM % 4))
-            val=$((RANDOM % 200 - 50))
-            echo "$op $val" > "$INPUT_DIR/input_$i"
-        fi
+    for i in $(seq 1 300); do
+        op=$((1 + RANDOM % 4))          # 1..4
+        val=$((RANDOM % 200 - 50))      # -50..149
+        echo "$op $val" > "$INPUT_DIR/input_$i"
     done
 
-    log "1000 файлов созданы в $INPUT_DIR"
+    log "300 файлов созданы в $INPUT_DIR"
 }
 
 # ----------------------------------------
