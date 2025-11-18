@@ -36,7 +36,9 @@ compile_program() {
     fi
 
     log "Компилируем с $CC ..."
-    $CC -O0 -g
+    $CC -O1 -g \
+        -fsanitize-coverage=trace-pc-guard,trace-pc \
+        -fno-inline -fno-omit-frame-pointer \
         -o "$PROGRAM_NAME" prog_1_structs_ways.c
     log "Бинарник $PROGRAM_NAME готов."
 }
