@@ -120,6 +120,10 @@ case "${1:-}" in
         compile_program
         setup_directories
         create_test_cases
+
+        export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
+        export AFL_SKIP_BIN_CHECK=1
+        
         echo
         echo "Подготовка завершена."
         ;;
